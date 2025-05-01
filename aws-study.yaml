@@ -1,0 +1,164 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: aws-study-cf template
+
+Parameters:
+  MyIP: # ユーザーに自身のIPアドレスを入力してもらう(SSH接続用)
+    Type: String
+    Description: Your IP address (without /32)
+
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: EC2 SSH Key Pair name
+  
+  LatestAmiId: # SSM パラメータストアから最新の Amazon Linux 2023 AMI ID を取得する
+    Type: "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>" # SSM パラメータを使ってEC2イメージIDを参照する型を指定
+    Default: "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64" # AmazonLinux2023の最新のAMI IDを指す
+
+  Prefix: # プレフィックスを変数化
+    Type: String # 文字列形式で入力"
+    Default:  "aws-study" # デフォルト値
+    Description:  "リソース名のプレフィックス"
+
+Resources:
+  # VPCの作成
+  myVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${Prefix}-vpc-cf"
+  
+  # Internet Gateway（IGW）の作成
+  IGW:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${Prefix}-igw-cf"
+  
+  # IGWをVPCへアタッチ
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref myVPC
+      InternetGatewayId: !Ref IGW
+  
+  
+  # サブネットの作成
+  # パブリックサブネット1
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select  [0, !GetAZs 'ap-northeast-1'] # 自動でAZを選択
+      VpcId: !Ref myVPC # 作成したVPCを参照
+      CidrBlock: 10.0.1.0/24 # サブネットのCIDR範囲
+      MapPublicIpOnLaunch: true # パブリックIPを割り当てる
+      Tags:
+        - Key: Name
+          Value: !Sub "${Prefix}-subnet-public1-cf"
+  
+  # パブリックサブネット2
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select  [1, !GetAZs 'ap-northeast-1'] # 自動でAZを選択
+      VpcId: !Ref myVPC # 作成したVPCを参照
+      CidrBlock: 10.0.2.0/24 # サブネットのCIDR範囲
+      MapPublicIpOnLaunch: true # パブリックIPを割り当てる
+      Tags:
+        - Key: Name
+          Value: !Sub "${Prefix}-subnet-public2-cf"
+
+  # プライベートサブネット1
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select  [0, !GetAZs 'ap-northeast-1'] # 自動でAZを選択
+      VpcId: !Ref myVPC # 作成したVPCを参照
+      CidrBlock: 10.0.3.0/24 # サブネットのCIDR範囲
+      MapPublicIpOnLaunch: false # パブリックIPを割り当てない
+      Tags:
+        - Key: Name
+          Value: !Sub "${Prefix}-subnet-private1-cf"
+  
+  # プライベートサブネット2
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select  [1, !GetAZs 'ap-northeast-1'] # 自動でAZを選択
+      VpcId: !Ref myVPC # 作成したVPCを参照
+      CidrBlock: 10.0.4.0/24 # サブネットのCIDR範囲
+      MapPublicIpOnLaunch: false # パブリックIPを割り当てない
+      Tags:
+        - Key: Name
+          Value: !Sub "${Prefix}-subnet-private2-cf"
+  
+  # パブリックルートテーブルの作成
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref myVPC #作成したVPCを参照
+      Tags:
+        - Key: Name
+          Value: !Sub "${Prefix}-public-rt-cf"
+  
+  # インターネットへのルート追加
+  InternetRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable # 作成したRouteTableを参照
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref IGW # 作成したIGWを参照
+
+  # パブリックサブネット1 にルートテーブルを関連付け
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1 # 作成したパブリックサブネット1を参照
+      RouteTableId: !Ref PublicRouteTable # 作成したRouteTableを参照
+
+  # パブリックサブネット2 にルートテーブルを関連付け
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2 # 作成したパブリックサブネット2を参照
+      RouteTableId: !Ref PublicRouteTable #作成したパブリックルートテーブルを参照
+
+  # セキュリティグループの作成（EC2用）
+  EC2securityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow SSH and web access
+      VpcId: !Ref myVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp # プロトコル
+          FromPort: 22 # SSH用のポート
+          ToPort: 22 # SSH用のポート
+          CidrIp: !Sub "${MyIP}/32" # 自分のIPアドレスに対するSSHアクセスを許可
+        - IpProtocol: tcp # プロトコル
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 0.0.0.0/0 # ポート8080アクセスを全て許可
+      SecurityGroupEgress:
+        - IpProtocol:  -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub "${Prefix}-ec2-sg-cf"
+
+  # EC2インスタンスの作成
+  myEC2Instance: #SSMパラーメータストアからAmazon Linux2023の最新AMI IDを取得
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref LatestAmiId # 作成したAMI IDを参照
+      InstanceType: t2.micro #インスタンスのタイプ（無料利用枠対象）
+      KeyName: !Ref KeyName #キーペアを参照
+      SubnetId: !Ref PublicSubnet1 # 作成したパブリックサブネット1を参照
+      SecurityGroupIds:
+        - !Ref EC2securityGroup # 作成したセキュリティグループを参照
+      Tags:
+        - Key: Name
+          Value: !Sub "${Prefix}-ec2-cf"

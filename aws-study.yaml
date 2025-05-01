@@ -16,7 +16,7 @@ Parameters:
 
   Prefix: # プレフィックスを変数化
     Type: String # 文字列形式で入力"
-    Default:  "aws-study-" # デフォルト値
+    Default:  "aws-study" # デフォルト値
     Description:  "リソース名のプレフィックス"
 
 Resources:
@@ -29,7 +29,7 @@ Resources:
       EnableDnsSupport: true
       Tags:
         - Key: Name
-          Value: !Sub "${Prefix}vpc-cf"
+          Value: !Sub "${Prefix}-vpc-cf"
   
   # Internet Gateway（IGW）の作成
   IGW:
@@ -37,7 +37,7 @@ Resources:
     Properties:
       Tags:
         - Key: Name
-          Value: !Sub "${Prefix}igw-cf"
+          Value: !Sub "${Prefix}-igw-cf"
   
   # IGWをVPCへアタッチ
   AttachGateway:
@@ -58,7 +58,7 @@ Resources:
       MapPublicIpOnLaunch: true # パブリックIPを割り当てる
       Tags:
         - Key: Name
-          Value: !Sub "${Prefix}subnet-public1-cf"
+          Value: !Sub "${Prefix}-subnet-public1-cf"
   
   # パブリックサブネット2
   PublicSubnet2:
@@ -70,7 +70,7 @@ Resources:
       MapPublicIpOnLaunch: true # パブリックIPを割り当てる
       Tags:
         - Key: Name
-          Value: !Sub "${Prefix}subnet-public2-cf"
+          Value: !Sub "${Prefix}-subnet-public2-cf"
 
   # プライベートサブネット1
   PrivateSubnet1:
@@ -82,7 +82,7 @@ Resources:
       MapPublicIpOnLaunch: false # パブリックIPを割り当てない
       Tags:
         - Key: Name
-          Value: !Sub "${Prefix}subnet-private1-cf"
+          Value: !Sub "${Prefix}-subnet-private1-cf"
   
   # プライベートサブネット2
   PrivateSubnet2:
@@ -94,7 +94,7 @@ Resources:
       MapPublicIpOnLaunch: false # パブリックIPを割り当てない
       Tags:
         - Key: Name
-          Value: !Sub "${Prefix}subnet-private2-cf"
+          Value: !Sub "${Prefix}-subnet-private2-cf"
   
   # パブリックルートテーブルの作成
   PublicRouteTable:
@@ -103,7 +103,7 @@ Resources:
       VpcId: !Ref myVPC #作成したVPCを参照
       Tags:
         - Key: Name
-          Value: !Sub "${Prefix}public-rt-cf"
+          Value: !Sub "${Prefix}-public-rt-cf"
   
   # インターネットへのルート追加
   InternetRoute:
@@ -147,7 +147,7 @@ Resources:
           CidrIp: 0.0.0.0/0
       Tags:
         - Key: Name
-          Value: !Sub "${Prefix}ec2-sg-cf"
+          Value: !Sub "${Prefix}-ec2-sg-cf"
 
   # EC2インスタンスの作成
   myEC2Instance: #SSMパラーメータストアからAmazon Linux2023の最新AMI IDを取得
@@ -161,4 +161,4 @@ Resources:
         - !Ref EC2securityGroup # 作成したセキュリティグループを参照
       Tags:
         - Key: Name
-          Value: !Sub "${Prefix}ec2-cf"
+          Value: !Sub "${Prefix}-ec2-cf"

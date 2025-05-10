@@ -15,13 +15,18 @@ Parameters:
     Default: "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64" # AmazonLinux2023の最新のAMI IDを指す
 
   Prefix: # プレフィックスを変数化
-    Type: String # 文字列形式で入力"
+    Type: String # リソース名に付けるプレフィックス（文字列）
     Default:  "aws-study" # デフォルト値
     Description:  "リソース名のプレフィックス"
 
+  RDSMasterPassword: # RDSのマスターパスワード
+    Description: MasterUserPassword for RDS
+    Type: String 
+    NoEcho: true # パスワードは非表示で入力
+
 Resources:
   # VPCの作成
-  myVPC:
+  VPC:
     Type: AWS::EC2::VPC
     Properties:
       CidrBlock: 10.0.0.0/16
@@ -43,7 +48,7 @@ Resources:
   AttachGateway:
     Type: AWS::EC2::VPCGatewayAttachment
     Properties:
-      VpcId: !Ref myVPC
+      VpcId: !Ref VPC
       InternetGatewayId: !Ref IGW
   
   
@@ -53,7 +58,7 @@ Resources:
     Type: AWS::EC2::Subnet
     Properties:
       AvailabilityZone: !Select  [0, !GetAZs 'ap-northeast-1'] # 自動でAZを選択
-      VpcId: !Ref myVPC # 作成したVPCを参照
+      VpcId: !Ref VPC # 作成したVPCを参照
       CidrBlock: 10.0.1.0/24 # サブネットのCIDR範囲
       MapPublicIpOnLaunch: true # パブリックIPを割り当てる
       Tags:
@@ -65,7 +70,7 @@ Resources:
     Type: AWS::EC2::Subnet
     Properties:
       AvailabilityZone: !Select  [1, !GetAZs 'ap-northeast-1'] # 自動でAZを選択
-      VpcId: !Ref myVPC # 作成したVPCを参照
+      VpcId: !Ref VPC # 作成したVPCを参照
       CidrBlock: 10.0.2.0/24 # サブネットのCIDR範囲
       MapPublicIpOnLaunch: true # パブリックIPを割り当てる
       Tags:
@@ -77,7 +82,7 @@ Resources:
     Type: AWS::EC2::Subnet
     Properties:
       AvailabilityZone: !Select  [0, !GetAZs 'ap-northeast-1'] # 自動でAZを選択
-      VpcId: !Ref myVPC # 作成したVPCを参照
+      VpcId: !Ref VPC # 作成したVPCを参照
       CidrBlock: 10.0.3.0/24 # サブネットのCIDR範囲
       MapPublicIpOnLaunch: false # パブリックIPを割り当てない
       Tags:
@@ -89,7 +94,7 @@ Resources:
     Type: AWS::EC2::Subnet
     Properties:
       AvailabilityZone: !Select  [1, !GetAZs 'ap-northeast-1'] # 自動でAZを選択
-      VpcId: !Ref myVPC # 作成したVPCを参照
+      VpcId: !Ref VPC # 作成したVPCを参照
       CidrBlock: 10.0.4.0/24 # サブネットのCIDR範囲
       MapPublicIpOnLaunch: false # パブリックIPを割り当てない
       Tags:
@@ -100,7 +105,7 @@ Resources:
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
-      VpcId: !Ref myVPC #作成したVPCを参照
+      VpcId: !Ref VPC # 作成したVPCを参照
       Tags:
         - Key: Name
           Value: !Sub "${Prefix}-public-rt-cf"
@@ -128,20 +133,20 @@ Resources:
       RouteTableId: !Ref PublicRouteTable #作成したパブリックルートテーブルを参照
 
   # セキュリティグループの作成（EC2用）
-  EC2securityGroup:
+  EC2SecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: Allow SSH and web access
-      VpcId: !Ref myVPC
+      VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: tcp # プロトコル
           FromPort: 22 # SSH用のポート
           ToPort: 22 # SSH用のポート
-          CidrIp: !Sub "${MyIP}/32" # 自分のIPアドレスに対するSSHアクセスを許可
+          CidrIp: !Sub "${MyIP}/32" # 自分のIPアドレスに対するSSHアクセスのみを許可
         - IpProtocol: tcp # プロトコル
           FromPort: 8080
           ToPort: 8080
-          CidrIp: 0.0.0.0/0 # ポート8080アクセスを全て許可
+          SourceSecurityGroupId: !Ref ALBSecurityGroup  # ALBセキュリティグループのみを許可
       SecurityGroupEgress:
         - IpProtocol:  -1
           CidrIp: 0.0.0.0/0
@@ -150,7 +155,7 @@ Resources:
           Value: !Sub "${Prefix}-ec2-sg-cf"
 
   # EC2インスタンスの作成
-  myEC2Instance: #SSMパラーメータストアからAmazon Linux2023の最新AMI IDを取得
+  EC2Instance: #SSMパラーメータストアからAmazon Linux2023の最新AMI IDを取得
     Type: AWS::EC2::Instance
     Properties:
       ImageId: !Ref LatestAmiId # 作成したAMI IDを参照
@@ -158,7 +163,135 @@ Resources:
       KeyName: !Ref KeyName #キーペアを参照
       SubnetId: !Ref PublicSubnet1 # 作成したパブリックサブネット1を参照
       SecurityGroupIds:
-        - !Ref EC2securityGroup # 作成したセキュリティグループを参照
+        - !Ref EC2SecurityGroup # 作成したセキュリティグループを参照
       Tags:
         - Key: Name
           Value: !Sub "${Prefix}-ec2-cf"
+
+  # セキュリティグループの作成（RDS用）
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow EC2 access to RDS # EC2インスタンスからのDBアクセスを許可
+      VpcId: !Ref VPC # 作成したVPCを参照
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306 # MySQLデータベースのデフォルト通信ポート番号
+          ToPort: 3306 # MySQLデータベースのデフォルト通信ポート番号
+          SourceSecurityGroupId: !Ref EC2SecurityGroup #EC2のセキュリティグループからのアクセスのみ許可
+      SecurityGroupEgress:
+        - IpProtocol:  -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub "${Prefix}-rds-sg-cf"
+
+  # DBサブネットグループの作成
+  RDSSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for RDS in 2AZs # AWS仕様で、異なるAZに属する2つ以上のサブネットが必須 (マルチAZ構成でなくても)
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      Tags:
+        - Key: Name
+          Value: !Sub "${Prefix}-rds-subnet-gp-cf"
+
+  # RDSの作成
+  RDSInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      AllocatedStorage: 20 # ストレージの割り当て
+      DBInstanceClass: db.t4g.micro # 無料利用枠インスタンスタイプ
+      AllowMajorVersionUpgrade: false # メジャーバージョンアップのグレードアップはしない
+      AutoMinorVersionUpgrade: true # マイナーバージョンアップを自動で行う
+      BackupRetentionPeriod: 1 # 自動バックアップを1日間有効にする（0にすると無効）
+      DBInstanceIdentifier: !Sub "${Prefix}-rds-cf"
+      DBName: awsstudy # データベース名を指定
+      DBSubnetGroupName: !Ref RDSSubnetGroup # 作成したDBサブネットグループを参照
+      DeletionProtection: true # 削除保護を有効
+      Engine: mysql # データベースエンジンはMySQLを指定
+      EngineVersion: 8.0.39 # バージョンは8.0.39を指定
+      MasterUsername: root
+      MasterUserPassword: !Ref RDSMasterPassword # パラメーター：パスワード項目を参照
+      MultiAZ: false #シングルAZで構成
+      Port: 3306 #MySQLのデフォルト
+      PubliclyAccessible: false #パブリックアクセスを許可しない
+      StorageEncrypted: true # 暗号を有効化
+      StorageType: gp2 # 無料利用枠に対応の汎用SSD(gp2)
+      VPCSecurityGroups: # 作成したセキュリティグループ（RDS用）を参照
+        - !Ref RDSSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${Prefix}-rds-cf"
+  
+  # ターゲットグループの作成
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${Prefix}-tg-cf"
+      Protocol: HTTP # プロトコルはHTTP
+      Port: 80 # ターゲットグループがリッスンするポート（80）
+      VpcId: !Ref VPC # 作成したVPCを参照
+      TargetType: instance # ターゲットタイプ
+      HealthCheckProtocol: HTTP # ヘルスチェックプロトコル
+      HealthCheckPath: /
+      HealthyThresholdCount: 5 # 正常のしきい値（5回）
+      UnhealthyThresholdCount: 2 # 非正常のしきい値（2回）
+      HealthCheckTimeoutSeconds: 5 # タイムアウト（5秒）
+      HealthCheckIntervalSeconds: 30 # ヘルスチェック間隔（30秒）
+      Matcher: # 成功コード
+        HttpCode: 200
+      Targets:
+        - Id: !Ref EC2Instance # EC2へ8080で受け渡し
+          Port: 8080
+      Tags:
+        - Key: Name
+          Value: !Sub "${Prefix}-tg-cf"
+  
+  # ALBのリスナーを設定
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB  # 作成したALBを参照
+      Port: 80 # ポート80で受けたら作成したターゲットグループへ転送
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup  # 作成したターゲットグループへ転送
+
+  # ALBの作成
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${Prefix}-alb-cf"
+      Scheme: internet-facing  # インターネット向け
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !Ref ALBSecurityGroup #作成したALBセキュリティグループを参照
+      Type: application
+      IpAddressType: ipv4
+      Tags:
+        - Key: Name
+          Value: !Sub "${Prefix}-alb-cf"
+
+  # セキュリティグループの作成（ALB用）
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow internet access to ALB
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp # プロトコル
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0 # ポート80アクセスを全て許可（インターネット経由のユーザーアクセス）
+      SecurityGroupEgress:
+        - IpProtocol:  -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub "${Prefix}-alb-sg-cf"

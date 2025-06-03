@@ -24,6 +24,10 @@ Parameters:
     Type: String 
     NoEcho: true # パスワードは非表示で入力
 
+  NotificationEmail: # CloudWatchアラームを受け取るメールアドレス
+    Type: String
+    Description: アラーム通知を受け取るメールアドレス
+
 Resources:
   # VPCの作成
   VPC:
@@ -201,16 +205,18 @@ Resources:
   # RDSの作成
   RDSInstance:
     Type: AWS::RDS::DBInstance
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
       AllocatedStorage: 20 # ストレージの割り当て
       DBInstanceClass: db.t4g.micro # 無料利用枠インスタンスタイプ
       AllowMajorVersionUpgrade: false # メジャーバージョンアップのグレードアップはしない
       AutoMinorVersionUpgrade: true # マイナーバージョンアップを自動で行う
-      BackupRetentionPeriod: 1 # 自動バックアップを1日間有効にする（0にすると無効）
-      DBInstanceIdentifier: !Sub "${Prefix}-rds-cf"
+      BackupRetentionPeriod: 0 # 自動バックアップを0日間有効にする（= 0にすると無効 = バックアップを取らない設定とした）
+      DBInstanceIdentifier: !Sub "${Prefix}-rds-cf" # 物理リソース名
       DBName: awsstudy # データベース名を指定
       DBSubnetGroupName: !Ref RDSSubnetGroup # 作成したDBサブネットグループを参照
-      DeletionProtection: true # 削除保護を有効
+      DeletionProtection: false # 削除保護を無効（学習用なので無効とした）
       Engine: mysql # データベースエンジンはMySQLを指定
       EngineVersion: 8.0.39 # バージョンは8.0.39を指定
       MasterUsername: root
@@ -295,3 +301,79 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "${Prefix}-alb-sg-cf"
+
+  # CloudWatchアラームの設定
+  EC2CPUUtilizationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${Prefix}-ec2-cpu-alarm"
+      AlarmDescription: "EC2のCPU使用率が1％になりました"
+      Namespace: "AWS/EC2" # EC2の
+      MetricName: CPUUtilization # サンプルするデータのタイプ(CPU使用率)
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref EC2Instance
+      Statistic: Average # サンプルのグループ化基準
+      Period: 300 # 期間(5分)
+      EvaluationPeriods: 1 # 連続した期間
+      Threshold: 1 # しきい値(1パーセント)
+      ComparisonOperator: GreaterThanOrEqualToThreshold # しきい値以上になったらアラーム(>=のこと)
+      AlarmActions:
+        - !Ref CPUAlarmSNSTopic
+  
+  # SNSの設定
+  CPUAlarmSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${Prefix}-cpu-alarm-topic"
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref NotificationEmail
+
+  # WAFの設定
+  WebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub "${Prefix}-webacl"
+      Scope: REGIONAL # ALBなどリージョナルリソース
+      DefaultAction: # デフォルト動作=ルール条件に合わない場合=安全と判断した場合にどうするかの設定
+        Allow: {} # 
+      VisibilityConfig: # WebACL「全体」のトラフィックの状態を見る為の設定
+        MetricName:  !Sub "${Prefix}-webacl-metric" # メトリックス名
+        SampledRequestsEnabled: true # サンプリングリクエストをCloudWatchで見る
+        CloudWatchMetricsEnabled: true # CloudWatchメトリクスを有効化
+      Rules:
+        - Name: !Sub "${Prefix}-corerule-set" # ルール名
+          Priority: 1 # ルールの優先順位（小さい数字が優先）
+          OverrideAction:
+            None: {} # ルールのデフォルト動作をそのまま使う = {} で上書きしないでそのまま使うの意味
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS # ルールの提供者
+              Name: AWSManagedRulesCommonRuleSet # どのルールセットを適用するのか = 今回は、「Core Rule Set」 のこと
+          VisibilityConfig: # 「ルール毎」のトラフィックの状態を見る為の設定
+            MetricName: !Sub "${Prefix}-corerule-metric" # このルール用のメトリクス名
+            SampledRequestsEnabled: true # サンプリングリクエストをCloudWatchで見る
+            CloudWatchMetricsEnabled: true # CloudWatchメトリクスを有効化
+  
+  # WAFとALBの関連付け設定
+  WebACLAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Properties:
+      ResourceArn: !Ref ALB # 作成したALBを参照（ALBはそのままARNを返してくれるから!RefでOK）
+      WebACLArn:  !GetAtt WebACL.Arn # 作成したWAF WebACLを参照（WebACLのARNは!Refで取得できないので!GetAttで.Arnと属性を明示的して指定しないとダメ）
+
+  # WAFログのCloudWatchLogsへの出力設定
+  WAFLogConfig:
+    Type: AWS::WAFv2::LoggingConfiguration
+    Properties:
+      LogDestinationConfigs: 
+        - !GetAtt WAFLogGroup.Arn # CloudWatchLogsのロググループARNを指定（ログ出力先）
+      ResourceArn: !GetAtt WebACL.Arn # ログを出力する対象のWebACLのARNを指定
+  
+  # CloudWatchLogsのロググループ作成
+  WAFLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "aws-waf-logs-${Prefix}-logGroup"
+      RetentionInDays: 5 # ログの保持日数 = 5日で設定
